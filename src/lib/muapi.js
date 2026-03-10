@@ -95,6 +95,9 @@ export class MuapiClient {
                 return submitData;
             }
 
+            // Notify caller of requestId so they can persist it before polling begins
+            if (params.onRequestId) params.onRequestId(requestId);
+
             // Step 2: Poll for results
             console.log('[Muapi] Polling for results, request_id:', requestId);
             const result = await this.pollForResult(requestId, key);
@@ -207,8 +210,10 @@ export class MuapiClient {
             const requestId = submitData.request_id || submitData.id;
             if (!requestId) return submitData;
 
+            if (params.onRequestId) params.onRequestId(requestId);
+
             console.log('[Muapi] Polling for video results, request_id:', requestId);
-            const result = await this.pollForResult(requestId, key, 120, 2000);
+            const result = await this.pollForResult(requestId, key, 900, 2000);
 
             const videoUrl = result.outputs?.[0] || result.url || result.output?.url;
             console.log('[Muapi] Video URL:', videoUrl);
@@ -277,6 +282,8 @@ export class MuapiClient {
             const requestId = submitData.request_id || submitData.id;
             if (!requestId) return submitData;
 
+            if (params.onRequestId) params.onRequestId(requestId);
+
             const result = await this.pollForResult(requestId, key);
             const imageUrl = result.outputs?.[0] || result.url || result.output?.url;
             console.log('[Muapi] I2I Result URL:', imageUrl);
@@ -344,7 +351,9 @@ export class MuapiClient {
             const requestId = submitData.request_id || submitData.id;
             if (!requestId) return submitData;
 
-            const result = await this.pollForResult(requestId, key, 120, 2000);
+            if (params.onRequestId) params.onRequestId(requestId);
+
+            const result = await this.pollForResult(requestId, key, 900, 2000);
             const videoUrl = result.outputs?.[0] || result.url || result.output?.url;
             console.log('[Muapi] I2V Result URL:', videoUrl);
             return { ...result, url: videoUrl };
@@ -423,7 +432,9 @@ export class MuapiClient {
             const requestId = submitData.request_id || submitData.id;
             if (!requestId) return submitData;
 
-            const result = await this.pollForResult(requestId, key, 120, 2000);
+            if (params.onRequestId) params.onRequestId(requestId);
+
+            const result = await this.pollForResult(requestId, key, 900, 2000);
             const videoUrl = result.outputs?.[0] || result.url || result.output?.url;
             console.log('[Muapi] V2V Result URL:', videoUrl);
             return { ...result, url: videoUrl };

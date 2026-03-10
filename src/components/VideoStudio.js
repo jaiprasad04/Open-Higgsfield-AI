@@ -2,6 +2,7 @@ import { muapi } from '../lib/muapi.js';
 import { t2vModels, getAspectRatiosForVideoModel, getDurationsForModel, getResolutionsForVideoModel, i2vModels, getAspectRatiosForI2VModel, getDurationsForI2VModel, getResolutionsForI2VModel, v2vModels } from '../lib/models.js';
 import { AuthModal } from './AuthModal.js';
 import { createUploadPicker } from './UploadPicker.js';
+import { savePendingJob, removePendingJob, getPendingJobs } from '../lib/pendingJobs.js';
 
 export function VideoStudio() {
     const container = document.createElement('div');
@@ -765,6 +766,40 @@ export function VideoStudio() {
         }
     } catch (e) { /* ignore */ }
 
+    // --- Resume any pending video generations from a previous session ---
+    (async () => {
+        const pending = getPendingJobs('video');
+        if (!pending.length) return;
+
+        const apiKey = localStorage.getItem('muapi_key');
+        if (!apiKey) return; // can't poll without key; jobs remain for next time
+
+        const banner = document.createElement('div');
+        banner.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[200] bg-[#111] border border-white/10 text-white text-sm px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3';
+        banner.innerHTML = `<span class="animate-spin text-primary">◌</span> <span class="banner-text">Resuming ${pending.length} pending generation${pending.length > 1 ? 's' : ''}…</span>`;
+        document.body.appendChild(banner);
+
+        let remaining = pending.length;
+        pending.forEach(async (job) => {
+            const elapsedAttempts = Math.floor((Date.now() - job.submittedAt) / job.interval);
+            const attemptsLeft = Math.max(1, job.maxAttempts - elapsedAttempts);
+            try {
+                const result = await muapi.pollForResult(job.requestId, apiKey, attemptsLeft, job.interval);
+                const url = result.outputs?.[0] || result.url || result.output?.url;
+                if (url) {
+                    addToHistory({ id: job.requestId, url, ...job.historyMeta, timestamp: new Date().toISOString() });
+                }
+            } catch (e) {
+                console.warn('[VideoStudio] Pending job failed on resume:', job.requestId, e.message);
+            } finally {
+                removePendingJob(job.requestId);
+                remaining--;
+                if (remaining === 0) banner.remove();
+                else banner.querySelector('.banner-text').textContent = `Resuming ${remaining} pending generation${remaining > 1 ? 's' : ''}…`;
+            }
+        });
+    })();
+
     // --- Button Handlers ---
     downloadBtn.onclick = () => {
         const current = resultVideo.src;
@@ -858,12 +893,22 @@ export function VideoStudio() {
         generateBtn.disabled = true;
         generateBtn.innerHTML = `<span class="animate-spin inline-block mr-2 text-black">◌</span> Generating...`;
 
+        let hadError = false;
+        let capturedRequestId = null;
+        const historyMeta = { prompt, model: selectedModel, aspect_ratio: selectedAr, duration: selectedDuration };
+
+        const onRequestId = (rid) => {
+            capturedRequestId = rid;
+            savePendingJob({ requestId: rid, studioType: 'video', historyMeta, maxAttempts: 900, interval: 2000, submittedAt: Date.now() });
+        };
+
         try {
             if (v2vMode) {
-                const res = await muapi.processV2V({ model: selectedModel, video_url: uploadedVideoUrl });
+                const res = await muapi.processV2V({ model: selectedModel, video_url: uploadedVideoUrl, onRequestId });
                 console.log('[VideoStudio] V2V response:', res);
                 if (res && res.url) {
-                    const genId = res.id || res.request_id || Date.now().toString();
+                    if (capturedRequestId) removePendingJob(capturedRequestId);
+                    const genId = res.id || capturedRequestId || Date.now().toString();
                     lastGenerationId = null;
                     lastGenerationModel = null;
                     addToHistory({ id: genId, url: res.url, prompt: '', model: selectedModel, timestamp: new Date().toISOString() });
@@ -880,6 +925,7 @@ export function VideoStudio() {
                 const i2vParams = {
                     model: selectedModel,
                     image_url: uploadedImageUrl,
+                    onRequestId,
                 };
                 if (prompt) i2vParams.prompt = prompt;
                 i2vParams.aspect_ratio = selectedAr;
@@ -893,7 +939,8 @@ export function VideoStudio() {
                 console.log('[VideoStudio] I2V response:', res);
 
                 if (res && res.url) {
-                    const genId = res.id || res.request_id || Date.now().toString();
+                    if (capturedRequestId) removePendingJob(capturedRequestId);
+                    const genId = res.id || capturedRequestId || Date.now().toString();
                     if (selectedModel === 'seedance-v2.0-i2v') {
                         lastGenerationId = genId;
                         lastGenerationModel = selectedModel;
@@ -911,7 +958,7 @@ export function VideoStudio() {
                 return;
             }
 
-            const params = { model: selectedModel };
+            const params = { model: selectedModel, onRequestId };
 
             if (prompt) params.prompt = prompt;
 
@@ -935,7 +982,8 @@ export function VideoStudio() {
             console.log('[VideoStudio] Full response:', res);
 
             if (res && res.url) {
-                const genId = res.id || res.request_id || Date.now().toString();
+                if (capturedRequestId) removePendingJob(capturedRequestId);
+                const genId = res.id || capturedRequestId || Date.now().toString();
                 // Store request_id for seedance-v2.0 models (enables Extend button)
                 if (selectedModel === 'seedance-v2.0-t2v' || selectedModel === 'seedance-v2.0-i2v') {
                     lastGenerationId = genId;
@@ -960,15 +1008,19 @@ export function VideoStudio() {
                 throw new Error('No video URL returned by API');
             }
         } catch (e) {
+            hadError = true;
+            if (capturedRequestId) removePendingJob(capturedRequestId);
             console.error(e);
-            generateBtn.innerHTML = `Error: ${e.message.slice(0, 40)}`;
+            // Restore hero so the page doesn't look broken after a failed generation
+            hero.classList.remove('opacity-0', 'scale-95', '-translate-y-10', 'pointer-events-none');
+            generateBtn.innerHTML = `Error: ${e.message.slice(0, 60)}`;
             setTimeout(() => {
                 generateBtn.innerHTML = `Generate ✨`;
-                generateBtn.disabled = false;
-            }, 3000);
+            }, 4000);
         } finally {
             generateBtn.disabled = false;
-            generateBtn.innerHTML = `Generate ✨`;
+            // Only reset the label on success; the catch timeout handles the error case
+            if (!hadError) generateBtn.innerHTML = `Generate ✨`;
         }
     };
 
