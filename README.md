@@ -336,9 +336,12 @@ Every image you upload is saved locally (URL + thumbnail) so you never upload th
 ### Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/Anil-matcha/Open-Generative-AI.git
+# Clone the repository (with submodules — required for the workflow + agent packages)
+git clone --recurse-submodules https://github.com/Anil-matcha/Open-Generative-AI.git
 cd Open-Generative-AI
+
+# If you already cloned without --recurse-submodules, run this once:
+# git submodule update --init --recursive
 
 # Install dependencies (installs root + packages/studio workspace)
 npm install
